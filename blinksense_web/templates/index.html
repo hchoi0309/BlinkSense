@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BlinkSense - Server-Side Detection</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            background: #111;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .header {
+            padding: 20px;
+            background: #222;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .video-container {
+            position: relative;
+            margin: 20px;
+        }
+        
+        #video {
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1); /* Mirror effect */
+            border: 2px solid #333;
+            border-radius: 8px;
+        }
+        
+        .status-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.4;
+            min-width: 250px;
+        }
+        
+        .alert {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #f33;
+            color: #fff;
+            padding: 20px 30px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            display: none;
+            z-index: 1000;
+        }
+        
+        .controls {
+            margin: 20px;
+            text-align: center;
+        }
+        
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 0 10px;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .status-good { color: #4CAF50; }
+        .status-warning { color: #FF9800; }
+        .status-error { color: #F44336; }
+        
+        .connection-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .connected { background: #4CAF50; }
+        .disconnected { background: #F44336; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 BlinkSense - Server-Side Drowsiness Detection</h1>
+        <p>Real-time eye state monitoring with MediaPipe + CNN on the server</p>
+    </div>
+    
+    <div class="video-container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas" style="display: none;"></canvas>
+    </div>
+    
+    <div class="controls">
+        <button id="startBtn">Start Camera & Detection</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
+    
+    <div class="status-panel" id="status">
+        <div>
+            <span class="connection-status disconnected" id="connectionStatus"></span>
+            <strong>Server Connection:</strong> <span id="connectionText">Disconnected</span>
+        </div>
+        <div style="margin-top: 10px;">
+            <strong>Detection Status:</strong> <span id="detectionStatus">Idle</span>
+        </div>
+        <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
+            <div><strong>EAR:</strong> <span id="earValue">--</span></div>
+            <div><strong>P_Open:</strong> <span id="popenValue">--</span></div>
+            <div><strong>Threshold:</strong> <span id="thresholdValue">--</span></div>
+        </div>
+        <div style="margin-top: 10px;">
+            <div><strong>Closed Streak:</strong> <span id="streakValue">0.0s</span></div>
+            <div><strong>PERCLOS:</strong> <span id="perclosValue">0.0%</span></div>
+            <div><strong>Cooldown:</strong> <span id="cooldownValue">0.0s</span></div>
+        </div>
+        <div style="margin-top: 10px;">
+            <div><strong>Calibrating:</strong> <span id="calibratingValue">--</span></div>
+        </div>
+    </div>
+    
+    <div class="alert" id="alert">
+        ⚠️ DROWSINESS DETECTED - PLEASE TAKE A BREAK! ⚠️
+    </div>
+    
+    <audio id="beep" preload="auto">
+        <source src="/static/audio/alert.wav" type="audio/wav">
+    </audio>
+    
+    <!-- ONNX.js for client-side ML inference -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.15.1/dist/ort.min.js"></script>
+    
+    <!-- MediaPipe for client-side face detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils@0.6.1629159505/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
+    
+    <script src="/static/js/client_simple.js"></script>
+</body>
+</html>

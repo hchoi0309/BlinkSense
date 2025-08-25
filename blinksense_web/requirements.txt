@@ -1,0 +1,8 @@
+Django>=4.2,<5.0
+channels>=4.0.0
+torch==2.0.1
+opencv-python-headless==4.8.0.74
+mediapipe==0.10.14
+numpy>=1.24.0,<2.0.0
+gunicorn>=21.2.0
+whitenoise>=6.5.0

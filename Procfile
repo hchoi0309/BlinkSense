@@ -1,0 +1,1 @@
+web: cd blinksense_web && gunicorn blinksense_web.wsgi:application --log-file -
