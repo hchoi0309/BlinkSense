@@ -11,35 +11,65 @@ import time
 from pathlib import Path
 from channels.generic.websocket import AsyncWebsocketConsumer
 import mediapipe as mp
-from torchvision import transforms
 
 logger = logging.getLogger(__name__)
 
+# Handle torchvision import gracefully
+try:
+    from torchvision import transforms
+    HAS_TORCHVISION = True
+except ImportError as e:
+    logger.warning(f"Torchvision not available: {e}")
+    HAS_TORCHVISION = False
+    # Define minimal transforms fallback
+    class Transforms:
+        @staticmethod
+        def ToPILImage():
+            return lambda x: x
+        @staticmethod  
+        def ToTensor():
+            return lambda x: torch.from_numpy(x).float().unsqueeze(0) / 255.0
+        @staticmethod
+        def Normalize(mean, std):
+            return lambda x: (x - mean[0]) / std[0]
+        @staticmethod
+        def Compose(transforms_list):
+            def compose(x):
+                for t in transforms_list:
+                    x = t(x)
+                return x
+            return compose
+    transforms = Transforms()
+
 # Import the model - add parent directory to path
 import sys
-src_path = str(Path(__file__).resolve().parents[3] / "src")
+src_path = str(Path(__file__).resolve().parents[2] / "src")
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
-    
-# Use dummy model for testing WebSocket connection first
-class SimpleResNetEye:
-    def __init__(self, *args, **kwargs):
-        logger.warning("Using dummy model - CNN predictions will not work!")
-        pass
-    def load_state_dict(self, *args, **kwargs):
-        pass
-    def eval(self):
-        return self
-    def __call__(self, x):
-        # Return dummy output for testing
-        return torch.zeros(1, 2), torch.zeros(1, 64)
+
+try:
+    from models.simple_resnet_eye import SimpleResNetEye
+    logger.info("Successfully imported real SimpleResNetEye model")
+except ImportError as e:
+    logger.error(f"Failed to import SimpleResNetEye: {e}")
+    # Fallback dummy model
+    class SimpleResNetEye:
+        def __init__(self, *args, **kwargs):
+            logger.warning("Using dummy model - CNN predictions will not work!")
+            pass
+        def load_state_dict(self, *args, **kwargs):
+            pass
+        def eval(self):
+            return self
+        def __call__(self, x):
+            return torch.zeros(1, 2), torch.zeros(1, 64)
 
 class DrowsinessDetector:
     """
     Server-side drowsiness detection using MediaPipe + CNN + temporal logic
     """
     
-    def __init__(self, model_path="../../model_registry/eye/0.1.0/weights.pt"):
+    def __init__(self, model_path=None):
         # MediaPipe setup
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -52,25 +82,36 @@ class DrowsinessDetector:
         # Eye landmark indices (same as JS version)
         self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
         self.RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-        
+
         # Load CNN model
         self.model = SimpleResNetEye(emb_dim=64, num_classes=2)
+        if model_path is None:
+            # Default path from project root
+            model_path = Path(__file__).resolve().parents[2] / "model_registry" / "eye" / "0.1.0" / "weights.pt"
         self.load_model(model_path)
         
         # Image preprocessing (same as training)
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5], std=[0.5])  # -> [-1,1]
-        ])
+        if HAS_TORCHVISION:
+            self.transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5], std=[0.5])  # -> [-1,1]
+            ])
+        else:
+            # Fallback preprocessing without torchvision
+            self.transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5], std=[0.5])
+            ])
         
         # Detection state
         self.fps = 15
-        self.p_open_thresh = 0.15
+        self.p_open_thresh = 0.3  # More conservative - only count as closed if CNN is quite confident
         self.hold_sec = 5.0
-        self.perclos_sec = 60
-        self.perclos_thresh = 0.15
+        self.perclos_sec = 30  # Reduced from 60s to 30s for faster recovery
+        self.perclos_thresh = 0.20  # Raise PERCLOS alert threshold from 15% to 20%
         self.cooldown_sec = 10.0
+        self.min_blink_duration = 2.0  # Only count closures lasting 2+ seconds for PERCLOS
         
         # Calibration
         self.calibrating = True
@@ -83,10 +124,17 @@ class DrowsinessDetector:
         self.cooldown = 0.0
         self.last_tick = time.time()
         
+        # Track sustained closures for PERCLOS
+        self.current_closure_duration = 0.0
+        self.sustained_closures_buffer = []  # Track periods that qualify for PERCLOS
+        
     def load_model(self, model_path):
         """Load the trained PyTorch model"""
         try:
-            model_path = Path(__file__).resolve().parents[3] / model_path
+            # Convert to Path object if it's a string
+            if isinstance(model_path, str):
+                model_path = Path(model_path)
+            
             if not model_path.exists():
                 logger.error(f"Model not found at {model_path}")
                 return
@@ -97,7 +145,7 @@ class DrowsinessDetector:
             
             self.model.load_state_dict(state)
             self.model.eval()
-            logger.info(f"Model loaded from {model_path}")
+            logger.info(f"Model loaded successfully from {model_path}")
             
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
@@ -153,14 +201,29 @@ class DrowsinessDetector:
     def predict_eye_state(self, eye_crop):
         """Predict if eye is open/closed using CNN"""
         try:
-            # Preprocess
-            tensor = self.transform(eye_crop).unsqueeze(0)  # Add batch dimension
+            # Preprocess - handle numpy array input
+            if not HAS_TORCHVISION:
+                # Manual preprocessing without torchvision
+                if isinstance(eye_crop, np.ndarray):
+                    # Convert to tensor: HWC -> CHW and normalize
+                    tensor = torch.from_numpy(eye_crop).float()
+                    if len(tensor.shape) == 2:  # Grayscale
+                        tensor = tensor.unsqueeze(0)  # Add channel dim
+                    elif len(tensor.shape) == 3:  # HWC -> CHW
+                        tensor = tensor.permute(2, 0, 1)
+                    tensor = tensor / 255.0  # [0,1]
+                    tensor = (tensor - 0.5) / 0.5  # [-1,1]
+                    tensor = tensor.unsqueeze(0)  # Add batch dimension
+                else:
+                    tensor = self.transform(eye_crop).unsqueeze(0)
+            else:
+                tensor = self.transform(eye_crop).unsqueeze(0)  # Add batch dimension
             
             # Inference
             with torch.no_grad():
                 logits, _ = self.model(tensor)
                 probs = torch.softmax(logits, dim=1)
-                p_open = probs[0, 0].item()  # Class 0 = OPEN (based on your debug output)
+                p_open = probs[0, 1].item()  # Class 1 = OPEN, Class 0 = CLOSED
                 
             return p_open
             
@@ -190,7 +253,7 @@ class DrowsinessDetector:
         # EAR calibration
         if self.calibrating and ear is not None and not closed_by_ear:
             self.ear_open_vals.append(ear)
-            if len(self.ear_open_vals) > 20 * self.fps:
+            if len(self.ear_open_vals) > 45 * self.fps:
                 mean_ear = np.mean(self.ear_open_vals)
                 std_ear = np.std(self.ear_open_vals)
                 self.tau_ear = max(0.12, mean_ear - 2 * std_ear)
@@ -199,20 +262,35 @@ class DrowsinessDetector:
         
         # Temporal tracking (only after calibration)
         if not self.calibrating:
-            self.perclos_buf.append(1 if closed else 0)
-            if len(self.perclos_buf) > int(self.perclos_sec * self.fps):
-                self.perclos_buf.pop(0)
-            
+            # Track closed streak (for immediate alerts)
             if closed:
                 self.closed_streak += dt
+                self.current_closure_duration += dt
             else:
+                # End of closure - check if it was sustained enough for PERCLOS
+                if self.current_closure_duration >= self.min_blink_duration:
+                    # Add this sustained closure period to PERCLOS tracking
+                    num_frames = int(self.current_closure_duration * self.fps)
+                    for _ in range(num_frames):
+                        self.sustained_closures_buffer.append(1)
+                
                 self.closed_streak = 0
+                self.current_closure_duration = 0.0
+            
+            # Also add open frames to maintain the time window
+            if not closed:
+                self.sustained_closures_buffer.append(0)
+            
+            # Maintain window size for PERCLOS calculation
+            window_size = int(self.perclos_sec * self.fps)
+            if len(self.sustained_closures_buffer) > window_size:
+                self.sustained_closures_buffer = self.sustained_closures_buffer[-window_size:]
                 
             if self.cooldown > 0:
                 self.cooldown -= dt
         
         # Calculate metrics
-        perclos = np.mean(self.perclos_buf) if self.perclos_buf else 0
+        perclos = np.mean(self.sustained_closures_buffer) if self.sustained_closures_buffer else 0
         need_alert = (self.closed_streak >= self.hold_sec) or (perclos >= self.perclos_thresh)
         
         # Send alert

@@ -213,7 +213,9 @@ class BlinkSenseClient {
             this.detectionStatus.textContent = 'Calibrating EAR...';
             this.detectionStatus.className = 'status-warning';
         } else {
-            this.detectionStatus.textContent = 'Active Detection';
+            // Check if CNN is available
+            const hasCNN = data.p_open !== null && data.p_open !== undefined;
+            this.detectionStatus.textContent = hasCNN ? 'Active Detection (EAR + CNN)' : 'Active Detection (EAR Only)';
             this.detectionStatus.className = 'status-good';
         }
         

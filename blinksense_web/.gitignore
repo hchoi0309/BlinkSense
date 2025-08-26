@@ -27,5 +27,5 @@ Thumbs.db
 # Deployment
 *.pid
 
-# Project specific
-FUTURE_ENHANCEMENTS.md
+# Data
+data/mrl/
