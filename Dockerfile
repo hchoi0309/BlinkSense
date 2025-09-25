@@ -9,9 +9,9 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libglib2.0-0 \
-    libgl1-mesa-glx \
     libgthread-2.0-0 \
+    libgl1-mesa-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies
