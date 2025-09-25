@@ -1,1 +1,1 @@
-web: cd blinksense_web && gunicorn blinksense_web.wsgi:application --log-file -
+web: uvicorn main:app --host 0.0.0.0 --port $PORT

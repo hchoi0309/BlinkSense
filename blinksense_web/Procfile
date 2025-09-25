@@ -1,1 +1,0 @@
-web: gunicorn blinksense_web.wsgi:application --log-file -

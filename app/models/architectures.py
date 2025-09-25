@@ -1,6 +1,10 @@
+"""
+CNN Model Architectures for Eye State Classification
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 class BasicBlock(nn.Module):
     """
@@ -29,10 +33,12 @@ class BasicBlock(nn.Module):
             identity = self.down(identity)
         out = F.relu(out + identity, inplace=True)
         return out
-    
-# A tiny ResNet-style CNN for 64x64 grayscale eye crops
+
+
 class SimpleResNetEye(nn.Module):
     """
+    A tiny ResNet-style CNN for 64x64 grayscale eye crops
+
     Stages (input 1x64x64):
       Stem:   3x3 conv -> BN -> ReLU -> MaxPool(2)    # 64 -> 32
       L1:     2 x BasicBlock(32)                      # 32 -> 32
